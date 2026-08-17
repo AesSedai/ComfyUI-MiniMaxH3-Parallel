@@ -44,6 +44,8 @@ Wire the model path as:
 Load Diffusion Model -> MiniMax H3 Attention Parallel -> scheduler and guider
 ```
 
+![MiniMax H3 Attention Parallel wiring](H3-parallel-attention.png)
+
 `devices` counts the model GPU as well as helpers. For example, `4` means one
 model GPU plus three activation-only helpers. `auto` uses up to four suitable
 visible GPUs and honors `min_sequence_length`; an explicit count fails early
@@ -54,15 +56,56 @@ The node selects exact Comfy Kitchen INT8 attention itself, so the global
 to this graph: measured four-step Ref2VA runs gained only about 1.5% in steady
 state and diverged substantially from the eager trajectory.
 
-## Measured reference result
+## Measured reference results
 
-At `[1, 56, 93312, 128]`, four-GPU attention measured 197.2 ms versus 534.4 ms
-on one GPU (2.71x for the attention call). A full 0.7 MP, six-second Ref2VA run
-with a stride-1 reference video measured 18.6-18.7 seconds per denoising step.
-The four-step saved output was decoded-frame identical to the exact baseline.
+### Test system and workload
 
-Helper GPUs used about 0.78 GiB each for the 14-head split and did not load
-model weights.
+- four NVIDIA RTX PRO 6000 Blackwell Max-Q 96 GB GPUs
+- ComfyUI 0.33.0, PyTorch 2.10.0+cu130, Comfy Kitchen 0.2.31
+- `minimax_h3_ref2va_int8_convrot.safetensors`
+- 0.7 MP portrait output: 640x1152, 158 frames, 6.58 seconds
+- reference image, reference video, and its audio
+- `res_multistep`, `simple`, four sampling steps, fixed seed, no compile
+- packed attention shape `[1, 56, 93312, 128]`
+
+The server was warmed with one complete one-step prompt. Each measured prompt
+used fresh graph IDs, forcing reference conditioning, sampling, decode, and save
+to execute while retaining normal resident model/file caches. Timings below are
+wall-clock node-transition measurements from ComfyUI's websocket.
+
+### Ref2VA workflow
+
+| Devices | Head split | Conditioning | Denoising | Seconds/step | Decode | Create/save | End-to-end | Denoiser speedup | End-to-end speedup |
+|---:|:---|---:|---:|---:|---:|---:|---:|---:|---:|
+| disabled | 56 | 56.78 s | 153.78 s | 38.45 s | 9.68 s | 3.78 s | 224.04 s | 1.00x | 1.00x |
+| 2 | 28/28 | 57.37 s | 102.26 s | 25.56 s | 24.79 s | 3.55 s | 187.98 s | 1.50x | 1.19x |
+| 3 | 19/19/18 | 56.61 s | 84.32 s | 21.08 s | 24.78 s | 3.81 s | 169.54 s | 1.82x | 1.32x |
+| 4 | 14/14/14/14 | 57.16 s | 76.01 s | 19.00 s | 24.84 s | 3.40 s | 161.41 s | 2.02x | 1.39x |
+
+`disabled` used the stock globally selected CK backend. The four-GPU mode cut
+denoising time by 50.6% and total workflow time by 28.0%. Conditioning and VAE
+decode remain single-device work, so they limit end-to-end scaling. Decode was
+also variable in this run: the disabled control took 9.68 seconds while the
+subsequent measurements took about 24.8 seconds. Denoiser timing is therefore
+the cleaner comparison between device counts.
+
+All four saved outputs had identical decoded video and audio SHA-256 hashes.
+The device setting changed performance without changing the generated result.
+
+### Attention-only synthetic benchmark
+
+Median steady-state critical-path time at the same packed attention shape:
+
+| Devices | Head split | Attention | Speedup |
+|---:|:---|---:|---:|
+| 1 | 56 | 534.4 ms | 1.00x |
+| 2 | 28/28 | 326.6 ms | 1.64x |
+| 3 | 19/19/18 | 235.7 ms | 2.27x |
+| 4 | 14/14/14/14 | 197.2 ms | 2.71x |
+
+Measured helper peak allocation was 1.56 GiB for the 28-head split, about
+1.06/1.01 GiB for the 19/18-head helpers, and 0.78 GiB per helper for the
+14-head split. Helper GPUs did not load model weights.
 
 ## Limitations
 
