@@ -35,7 +35,7 @@ version supplied by ComfyUI.
 Expose every participating GPU to the one ComfyUI process:
 
 ```bash
-CUDA_VISIBLE_DEVICES=0,1,2,3 python main.py
+CUDA_VISIBLE_DEVICES=0,1,2,3 python main.py --use-ck-attention
 ```
 
 Wire the model path as:
@@ -51,10 +51,10 @@ model GPU plus three activation-only helpers. `auto` uses up to four suitable
 visible GPUs and honors `min_sequence_length`; an explicit count fails early
 if that many peer-accessible CK-capable GPUs are not available.
 
-The node selects exact Comfy Kitchen INT8 attention itself, so the global
-`--use-ck-attention` option is not required. Do not add `Torch Compile Model`
-to this graph: measured four-step Ref2VA runs gained only about 1.5% in steady
-state and diverged substantially from the eager trajectory.
+Launch ComfyUI with `--use-ck-attention` so the model uses the required Comfy
+Kitchen INT8 attention path. Do not add `Torch Compile Model` to this graph:
+measured four-step Ref2VA runs gained only about 1.5% in steady state and
+diverged substantially from the eager trajectory.
 
 ## Measured reference results
 
